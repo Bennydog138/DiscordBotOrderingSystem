@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time POS & Inventory System</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom scrollbar for cart and item list */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #9ca3af;
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+        /* Custom styles for responsiveness and clean look */
+        .grid-auto-fit {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 16px;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#10b981', // Emerald 500
+                        secondary: '#f97316', // Orange 500
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-100 font-sans min-h-screen p-4 md:p-8">
+
+    <div id="loading-indicator" class="fixed inset-0 bg-gray-100 bg-opacity-75 flex items-center justify-center z-50">
+        <div class="flex flex-col items-center">
+            <div class="animate-spin rounded-full h-16 w-16 border-b-4 border-primary"></div>
+            <p class="mt-4 text-lg text-gray-700">Connecting to Inventory...</p>
+        </div>
+    </div>
+
+    <div id="app-container" class="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden" style="display: none;">
+        
+        <!-- Header -->
+        <header class="p-4 border-b bg-gray-50 flex justify-between items-center flex-wrap gap-2">
+            <h1 class="text-2xl font-extrabold text-gray-800">SwiftPOS Terminal</h1>
+            <button id="toggle-view-btn" onclick="toggleView()" class="px-4 py-2 bg-secondary text-white font-semibold rounded-lg shadow-md hover:bg-orange-600 transition duration-300">
+                Open Admin Panel
+            </button>
+        </header>
+
+        <!-- Main Content Area -->
+        <div class="flex flex-col lg:flex-row min-h-[70vh]">
+
+            <!-- Left Panel (POS Items / Admin Forms) -->
+            <div id="left-panel" class="w-full lg:w-3/5 p-6 border-b lg:border-r lg:border-b-0">
+                <!-- Content will be rendered here dynamically -->
+            </div>
+
+            <!-- Right Panel (Cart / User Info) -->
+            <div id="right-panel" class="w-full lg:w-2/5 p-6 bg-gray-50 flex flex-col justify-between">
+                <div id="pos-info" style="display: block;">
+                    <h2 class="text-xl font-bold mb-4 text-gray-700">Current Sale</h2>
+                    
+                    <div id="cart-display" class="space-y-3 custom-scrollbar overflow-y-auto max-h-[50vh] pr-2">
+                        <!-- Cart items will be rendered here -->
+                        <p class="text-gray-500 text-center py-8" id="empty-cart-message">Cart is Empty</p>
+                    </div>
+
+                    <div class="mt-6 pt-4 border-t border-gray-200">
+                        <div class="flex justify-between items-center text-2xl font-bold text-gray-800">
+                            <span>TOTAL:</span>
+                            <span id="total-display">$0.00</span>
+                        </div>
+                    </div>
+
+                    <button id="checkout-btn" onclick="checkout()" disabled class="w-full mt-6 px-6 py-3 bg-primary text-white font-extrabold text-lg rounded-xl shadow-lg hover:bg-emerald-600 transition duration-300 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Process Sale
+                    </button>
+                </div>
+
+                <div id="admin-info" style="display: none;">
+                    <h2 class="text-xl font-bold mb-4 text-gray-700">System Info</h2>
+                    <p class="text-sm text-gray-600">
+                        **App ID:** <span id="display-app-id" class="font-mono text-xs bg-gray-200 p-1 rounded"></span>
+                    </p>
+                    <p class="text-sm text-gray-600 mt-2">
+                        **User ID:** <span id="display-user-id" class="font-mono text-xs bg-gray-200 p-1 rounded break-all"></span>
+                    </p>
+                    <p class="mt-4 p-3 bg-blue-100 text-blue-800 rounded-lg text-sm">
+                        Data is stored publicly under this App ID so other users can see and modify the inventory.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- The Modal for Messages -->
+    <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-[100]">
+        <div class="bg-white p-6 rounded-lg shadow-xl w-80">
+            <h3 id="modal-title" class="text-xl font-bold mb-3"></h3>
+            <p id="modal-message" class="text-gray-700 mb-4"></p>
+            <button onclick="closeModal()" class="w-full py-2 bg-primary text-white rounded-lg hover:bg-emerald-600">OK</button>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc, query, orderBy, getDocs, runTransaction, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Global application state
+        window.app, window.db, window.auth, window.userId = null;
+        window.inventory = {}; // { itemId: { name, price, docId } }
+        window.cart = {};      // { itemId: count }
+        window.currentView = 'pos'; // 'pos' or 'admin'
+
+        // DOM elements
+        const toggleViewBtn = document.getElementById('toggle-view-btn');
+        const leftPanel = document.getElementById('left-panel');
+        const loadingIndicator = document.getElementById('loading-indicator');
+        const appContainer = document.getElementById('app-container');
+        const totalDisplay = document.getElementById('total-display');
+        const checkoutBtn = document.getElementById('checkout-btn');
+        const cartDisplay = document.getElementById('cart-display');
+        const emptyCartMessage = document.getElementById('empty-cart-message');
+        const displayAppId = document.getElementById('display-app-id');
+        const displayUserId = document.getElementById('display-user-id');
+        const posInfo = document.getElementById('pos-info');
+        const adminInfo = document.getElementById('admin-info');
+
+        /**
+         * Initializes Firebase and authenticates the user.
+         */
+        async function initializeFirebase() {
+            try {
+                // setLogLevel('debug'); // Uncomment to see Firebase logs
+                window.app = initializeApp(firebaseConfig);
+                window.db = getFirestore(window.app);
+                window.auth = getAuth(window.app);
+
+                // Authentication
+                if (initialAuthToken) {
+                    await signInWithCustomToken(window.auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+
+                onAuthStateChanged(window.auth, (user) => {
+                    if (user) {
+                        window.userId = user.uid;
+                        displayAppId.textContent = appId;
+                        displayUserId.textContent = window.userId;
+                        console.log("Authentication successful. User ID:", window.userId);
+                        setupInventoryListener();
+                    } else {
+                        // This should not happen if token is provided, but good practice
+                        console.error("User is not signed in.");
+                    }
+                    loadingIndicator.style.display = 'none';
+                    appContainer.style.display = 'block';
+                    renderApp(); // Initial render after auth
+                });
+            } catch (error) {
+                console.error("Error during Firebase initialization:", error);
+                loadingIndicator.innerHTML = `<div class="p-6 bg-red-100 text-red-800 rounded-lg shadow-lg">Failed to initialize. Check console for details.</div>`;
+            }
+        }
+
+        /**
+         * Sets up a real-time listener for the item inventory collection.
+         */
+        function setupInventoryListener() {
+            if (!window.db) return;
+
+            // Items are stored in a PUBLIC collection path
+            const collectionPath = `/artifacts/${appId}/public/data/pos_items`;
+            const itemsColRef = collection(window.db, collectionPath);
+            const q = query(itemsColRef); // No orderBy to avoid potential index errors
+
+            onSnapshot(q, (snapshot) => {
+                const newInventory = {};
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    newInventory[doc.id] = { ...data, docId: doc.id };
+                });
+                window.inventory = newInventory;
+                console.log("Inventory updated:", Object.keys(window.inventory).length, "items loaded.");
+
+                // Re-render the current view to reflect new inventory
+                renderApp();
+
+            }, (error) => {
+                console.error("Error listening to inventory:", error);
+                showModal("Database Error", "Could not load inventory data. Check console for details.");
+            });
+        }
+
+        /**
+         * Renders the entire application based on the current view.
+         */
+        window.renderApp = function() {
+            if (window.currentView === 'pos') {
+                renderPOSPanel();
+                renderCart();
+            } else {
+                renderAdminPanel();
+                renderCart(); // Still show cart for context in admin view
+            }
+        };
+
+        /**
+         * Renders the POS item selection panel.
+         */
+        function renderPOSPanel() {
+            toggleViewBtn.textContent = 'Open Admin Panel';
+            leftPanel.innerHTML = `
+                <h2 class="text-xl font-bold mb-4 text-gray-700">Select Items</h2>
+                <div id="pos-items-list" class="grid-auto-fit max-h-[60vh] custom-scrollbar overflow-y-auto pr-2">
+                    <!-- Items will be injected here -->
+                </div>
+            `;
+            posInfo.style.display = 'block';
+            adminInfo.style.display = 'none';
+
+            const posItemsList = document.getElementById('pos-items-list');
+            const itemsHtml = Object.values(window.inventory).map(item => `
+                <button onclick="addToCart('${item.docId}')" class="flex flex-col items-center justify-center p-3 bg-white border border-gray-200 rounded-xl shadow-sm hover:shadow-lg transition duration-200 hover:scale-[1.02] active:bg-primary/10">
+                    <span class="text-lg font-semibold text-gray-800 text-center">${item.name}</span>
+                    <span class="text-sm text-primary font-bold mt-1">$${item.price.toFixed(2)}</span>
+                </button>
+            `).join('');
+
+            posItemsList.innerHTML = itemsHtml.length ? itemsHtml : `
+                <p class="text-center text-gray-500 col-span-full py-10">No items available. Head to the Admin Panel to add some!</p>
+            `;
+        }
+
+        /**
+         * Renders the cart display and total.
+         */
+        window.renderCart = function() {
+            let total = 0;
+            let cartHtml = '';
+            let itemCount = 0;
+
+            for (const docId in window.cart) {
+                const count = window.cart[docId];
+                if (count > 0 && window.inventory[docId]) {
+                    itemCount++;
+                    const item = window.inventory[docId];
+                    const subtotal = item.price * count;
+                    total += subtotal;
+
+                    cartHtml += `
+                        <div class="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm border border-gray-100">
+                            <div class="flex-grow">
+                                <span class="font-semibold text-gray-800">${item.name}</span>
+                                <span class="block text-xs text-gray-500">$${item.price.toFixed(2)} per unit</span>
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <button onclick="removeFromCart('${docId}')" class="text-lg text-red-500 p-1 hover:bg-red-50 rounded-full w-8 h-8 flex items-center justify-center transition duration-150" title="Remove One">
+                                    &minus;
+                                </button>
+                                <span class="font-bold text-gray-700 w-4 text-center">${count}</span>
+                                <button onclick="addToCart('${docId}')" class="text-lg text-primary p-1 hover:bg-emerald-50 rounded-full w-8 h-8 flex items-center justify-center transition duration-150" title="Add One">
+                                    &plus;
+                                </button>
+                            </div>
+                            <span class="font-bold text-lg text-gray-900 ml-4 w-16 text-right">$${subtotal.toFixed(2)}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            cartDisplay.innerHTML = cartHtml;
+            totalDisplay.textContent = `$${total.toFixed(2)}`;
+            checkoutBtn.disabled = total === 0;
+            emptyCartMessage.style.display = itemCount === 0 ? 'block' : 'none';
+        }
+
+        /**
+         * Renders the Admin Panel for inventory management.
+         */
+        function renderAdminPanel() {
+            toggleViewBtn.textContent = 'Open POS Panel';
+            leftPanel.innerHTML = `
+                <!-- Add Item Form -->
+                <h2 class="text-xl font-bold mb-4 text-primary">Add New Item</h2>
+                <form id="add-item-form" class="bg-gray-50 p-4 rounded-lg shadow-inner mb-8">
+                    <div class="space-y-4 md:flex md:space-y-0 md:space-x-4">
+                        <input type="text" id="item-name" placeholder="Item Name (e.g., Latte)" required class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary">
+                        <input type="number" id="item-price" placeholder="Price (e.g., 4.50)" step="0.01" min="0.01" required class="w-full md:w-1/3 p-2 border border-gray-300 rounded-lg focus:ring-primary focus:border-primary">
+                        <button type="submit" class="w-full md:w-auto px-6 py-2 bg-primary text-white font-semibold rounded-lg hover:bg-emerald-600 transition duration-300">
+                            Save Item
+                        </button>
+                    </div>
+                </form>
+
+                <!-- Inventory List -->
+                <h2 class="text-xl font-bold mb-4 text-gray-700">Current Inventory (${Object.keys(window.inventory).length} Items)</h2>
+                <div id="admin-items-list" class="space-y-2 max-h-[50vh] custom-scrollbar overflow-y-auto pr-2">
+                    <!-- Inventory items will be injected here -->
+                </div>
+            `;
+            posInfo.style.display = 'none';
+            adminInfo.style.display = 'block';
+
+            // Attach form submission listener
+            document.getElementById('add-item-form').addEventListener('submit', handleAddItem);
+
+            const adminItemsList = document.getElementById('admin-items-list');
+            const itemsHtml = Object.values(window.inventory).map(item => `
+                <div class="flex justify-between items-center p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                    <div class="font-medium text-gray-800 flex-grow">${item.name}</div>
+                    <div class="text-primary font-bold mx-4">$${item.price.toFixed(2)}</div>
+                    <button onclick="deleteItem('${item.docId}')" class="ml-4 p-2 text-red-600 rounded-full hover:bg-red-100 transition duration-150" title="Delete Item">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            `).join('');
+
+            adminItemsList.innerHTML = itemsHtml.length ? itemsHtml : `
+                <p class="text-center text-gray-500 py-10">The inventory is currently empty.</p>
+            `;
+        }
+
+        /**
+         * Toggles the application view between POS and Admin.
+         */
+        window.toggleView = function() {
+            window.currentView = window.currentView === 'pos' ? 'admin' : 'pos';
+            renderApp();
+        };
+
+        /**
+         * Adds an item to the shopping cart.
+         * @param {string} docId - The Firestore document ID of the item.
+         */
+        window.addToCart = function(docId) {
+            window.cart[docId] = (window.cart[docId] || 0) + 1;
+            renderCart();
+        };
+
+        /**
+         * Removes one unit of an item from the shopping cart.
+         * @param {string} docId - The Firestore document ID of the item.
+         */
+        window.removeFromCart = function(docId) {
+            if (window.cart[docId] && window.cart[docId] > 0) {
+                window.cart[docId] -= 1;
+                if (window.cart[docId] === 0) {
+                    delete window.cart[docId];
+                }
+            }
+            renderCart();
+        };
+
+        /**
+         * Finalizes the sale (clears the cart).
+         */
+        window.checkout = function() {
+            if (Object.keys(window.cart).length > 0) {
+                window.cart = {}; // Clear the cart
+                renderCart();
+                showModal("Sale Complete", "The transaction has been finalized and the cart has been cleared.");
+            }
+        };
+
+        /**
+         * Handles the form submission to add a new item to Firestore.
+         */
+        async function handleAddItem(event) {
+            event.preventDefault();
+            const nameInput = document.getElementById('item-name');
+            const priceInput = document.getElementById('item-price');
+
+            const name = nameInput.value.trim();
+            const price = parseFloat(priceInput.value);
+
+            if (!name || isNaN(price) || price <= 0) {
+                showModal("Input Error", "Please provide a valid item name and a positive price.");
+                return;
+            }
+
+            const collectionPath = `/artifacts/${appId}/public/data/pos_items`;
+            try {
+                // Use a standard name for the document ID to make it simple (e.g., item name lowercase, no spaces)
+                const docRef = doc(window.db, collectionPath, name.toLowerCase().replace(/\s/g, '-'));
+
+                await setDoc(docRef, {
+                    name: name,
+                    price: price,
+                    createdAt: Date.now()
+                });
+
+                showModal("Success", `Item "${name}" added/updated successfully!`);
+                nameInput.value = '';
+                priceInput.value = '';
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                showModal("Error", "Could not save item to inventory. Check console for details.");
+            }
+        }
+
+        /**
+         * Deletes an item from Firestore.
+         * @param {string} docId - The document ID of the item to delete.
+         */
+        window.deleteItem = async function(docId) {
+            if (!confirm("Are you sure you want to delete this item? This action is permanent.")) {
+                return;
+            }
+
+            const collectionPath = `/artifacts/${appId}/public/data/pos_items`;
+            try {
+                const docRef = doc(window.db, collectionPath, docId);
+                await deleteDoc(docRef);
+                showModal("Deleted", `${window.inventory[docId].name} has been removed.`);
+
+                // Also check and remove from cart if present
+                if (window.cart[docId]) {
+                    delete window.cart[docId];
+                    renderCart();
+                }
+            } catch (e) {
+                console.error("Error deleting document: ", e);
+                showModal("Error", "Could not delete item. Check console for details.");
+            }
+        };
+
+        /**
+         * Displays a custom modal message.
+         * @param {string} title - The title of the modal.
+         * @param {string} message - The message content.
+         */
+        window.showModal = function(title, message) {
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            document.getElementById('modal').classList.remove('hidden');
+            document.getElementById('modal').classList.add('flex');
+        };
+
+        /**
+         * Hides the custom modal.
+         */
+        window.closeModal = function() {
+            document.getElementById('modal').classList.add('hidden');
+            document.getElementById('modal').classList.remove('flex');
+        };
+
+        // Start the application
+        initializeFirebase();
+
+    </script>
+</body>
+</html>
